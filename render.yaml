@@ -5,7 +5,7 @@ services:
     dockerfilePath: ./Dockerfile
     plan: free
     region: singapore
-    autoDeploy: true
+    autoDeployTrigger: off
     healthCheckPath: /health
     envVars:
       - key: ENABLE_SCHEDULER
@@ -22,5 +22,5 @@ services:
         generateValue: true
       - key: APP_PASSWORD
         sync: false
-      # Optional. Without this, local SQLite data is ephemeral on Render.
-      # Configure a dedicated persistent PostgreSQL database for long-term collection.
+      # Persistent DB is intentionally not auto-provisioned to avoid unintended costs.
+      # To retain all future records reliably, configure DATABASE_URL to a dedicated persistent PostgreSQL instance.
