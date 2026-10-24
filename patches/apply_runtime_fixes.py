@@ -37,3 +37,9 @@ old = "const pairs=[['ROI',n(t.roi,2,'%')],['PnL',n(t.pnl,2)],['MDD',n(t.mdd,2,'
 new = "const periods=t.period_metrics||{};const mddFor=k=>periods[k]&&periods[k].mdd!==undefined?n(periods[k].mdd,2,'%'):'Not reported';const pairs=[['MDD · 7 day',mddFor('7D')],['MDD · 30 day',mddFor('30D')],['MDD · 365 day',mddFor('365D')],['ROI',n(t.roi,2,'%')],['PnL',n(t.pnl,2)],['MDD · profile default',n(t.mdd,2,'%')],['Platform win rate',n(t.win_rate,2,'%')],"
 s = s.replace(old, new)
 js.write_text(s)
+
+
+# Make the System page distinguish a successful DB ping from durable storage.
+old = "const [s,notes]=await Promise.all([api('/api/status'),api('/api/system/source-notes')]);$('#system-health-tag').className='tag green';$('#system-health-tag').textContent='DATABASE CONNECTED';"
+new = "const [s,notes,h]=await Promise.all([api('/api/status'),api('/api/system/source-notes'),api('/health')]);const durable=s.database_backend&&s.database_backend.startsWith('PostgreSQL');$('#system-health-tag').className='tag '+(h.database==='connected'?(durable?'green':'gray'):'red');$('#system-health-tag').textContent=h.database!=='connected'?'DATABASE UNAVAILABLE':(durable?'POSTGRESQL CONNECTED':'SQLITE CONNECTED · NOT DURABLE');"
+s = s.replace(old, new)
