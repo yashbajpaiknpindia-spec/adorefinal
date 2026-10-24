@@ -1,0 +1,26 @@
+services:
+  - type: web
+    name: binance-copy-intelligence
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    region: singapore
+    autoDeploy: true
+    healthCheckPath: /health
+    envVars:
+      - key: ENABLE_SCHEDULER
+        value: "true"
+      - key: MONITOR_INTERVAL_MINUTES
+        value: "30"
+      - key: SCHEDULED_PAGES_PER_MODE
+        value: "1"
+      - key: SCHEDULED_HISTORY_BATCH
+        value: "5"
+      - key: SCHEDULED_PATH_BATCH
+        value: "10"
+      - key: SECRET_KEY
+        generateValue: true
+      - key: APP_PASSWORD
+        sync: false
+      # Optional. Without this, local SQLite data is ephemeral on Render.
+      # Configure a dedicated persistent PostgreSQL database for long-term collection.
