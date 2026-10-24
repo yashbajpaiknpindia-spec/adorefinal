@@ -2,7 +2,10 @@ FROM python:3.12-slim
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
 WORKDIR /app
 COPY bundle/ /tmp/bundle/
-RUN cat /tmp/bundle/part* | base64 -d | tar -xJ -C /app \
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends tar xz-utils \
+    && rm -rf /var/lib/apt/lists/* \
+    && cat /tmp/bundle/part* | base64 -d | tar -xJ -C /app \
     && rm -rf /tmp/bundle \
     && pip install --no-cache-dir -r /app/requirements.txt
 EXPOSE 10000
