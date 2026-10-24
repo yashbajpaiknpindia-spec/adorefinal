@@ -125,7 +125,7 @@ def _mt_report(market_type="FUTURES", min_closed_trades=10, min_profit_factor=1.
     return {"mode":"PAPER_ONLY_NO_ORDERS","market_type":market_type,"evaluated_at_utc":utcnow().isoformat()+"Z",
         "monitored_count":len(rows),"eligible_count":sum(x["eligible"] for x in rows),"blocked_count":sum(not x["eligible"] for x in rows),
         "selected_count":len(chosen),"selected_portfolios":[{k:x.get(k) for k in ("id","nickname","portfolio_id","profile_url","score","allocation_pct","mdd_30d","profit_factor","stored_closed_trades","symbols","selection_reason")} for x in chosen],
-        "candidates":rows[:250],"candidate_rows_returned":min(250,len(rows)),"candidates_omitted_from_response":max(0,len(rows)-250),
+        "candidates":rows[:1000],"candidate_rows_returned":min(1000,len(rows)),"candidates_omitted_from_response":max(0,len(rows)-1000),
         "settings":{"min_closed_trades":min_closed_trades,"min_profit_factor":min_profit_factor,"max_mdd_pct":max_mdd_pct,"min_roi_7d":min_roi_7d,"max_selected":max_selected},
         "limitations":["Only discovered/manual database profiles are evaluated, not a proven complete Binance universe.","Stored public profile data is not a guaranteed real-time lead-trader order feed.","Trade-history PF uses stored closed positions and is not adjusted for your fills, fees, slippage or funding.","Symbol overlap uses historical closed positions; current open exposure may be unavailable.","This mode does not place, copy, amend or close real orders. Allocations are illustrative paper weights."]}
 
