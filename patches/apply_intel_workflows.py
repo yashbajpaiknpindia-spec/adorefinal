@@ -505,7 +505,9 @@ def _mt_report(market_type="FUTURES", min_closed_trades=10, min_profit_factor=1.
         """),{"market_type":market_type,"since_ms":int((_it_time.time()-90*86400)*1000)}).mappings().all()
         symbols={}
         for r in symbol_rows: symbols.setdefault(int(r["trader_id"]),[]).append(str(r["symbol"]))
-    now=utcnow(); rows=[]
+    now=utcnow()
+    if now and getattr(now,"tzinfo",None) is not None: now=now.replace(tzinfo=None)
+    rows=[]
     for t in traders:
         try: periods=json.loads(t.period_metrics or "{}")
         except Exception: periods={}
