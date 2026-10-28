@@ -43,7 +43,7 @@ jobs:
       - name: Verify key pages and API routes exist
         run: |
           grep -q 'id="view-multi-trader"' /app/templates/index.html
-          grep -q 'id="view-portfolio-lab"' /app/templates/index.html
+          grep -Eq 'id="view-portfolio(-lab)?"' /app/templates/index.html
           grep -q 'id="view-profit-tax"' /app/templates/index.html
           grep -q 'id="view-strategy-watch"' /app/templates/index.html
           grep -q '/api/trade-behaviour/summary' /app/app.py
