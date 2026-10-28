@@ -83,6 +83,7 @@ pages = r"""
         <div class="button-row"><button class="btn secondary" id="pt-refresh-rate">Refresh P2P rates</button><span class="help-text">Past trades are converted using the selected current rate, not a historical P2P price. P2P ads, payment method, order limits, and merchant spread affect the actual executed price.</span></div>
       </article>
       <article class="panel"><div class="panel-header"><div><div class="eyebrow">TAX & LOSS RESERVE</div><h3>Ledger totals and data gaps</h3></div><span class="tag gray" id="pt-ledger-status">No account records loaded</span></div><div id="pt-warning" class="notice-box">Import or sync your personal records to calculate the account ledger.</div><div class="table-scroll"><table><thead><tr><th>Strategy / label</th><th>Records</th><th>Positive realised PnL</th><th>Gross losses (not offset)</th><th>Fees</th><th>Funding</th><th>30% tax reserve</th><th>Economic PnL</th><th>After-reserve PnL</th><th>Status</th></tr></thead><tbody id="pt-strategy-rows"><tr><td colspan="10" class="empty-state">No imported personal trade records.</td></tr></tbody></table></div></article>
+      <article class="panel table-panel"><div class="panel-header"><div><div class="eyebrow">TRADE-LEVEL NET RESULTS</div><h3>Trade-level PnL after 30% reserve</h3></div><span class="tag gray">Fees/funding are attributed only when a trade ID matches</span></div><div class="table-scroll"><table><thead><tr><th>Time (UTC)</th><th>Strategy label</th><th>Market</th><th>Symbol</th><th>Group / Trade ID</th><th>Realised PnL</th><th>Fees</th><th>Funding</th><th>Tax reserve</th><th>Net after reserve</th><th>Status</th></tr></thead><tbody id="pt-trade-rows"><tr><td colspan="11" class="empty-state">No imported personal trade records.</td></tr></tbody></table></div></article>
       <article class="panel table-panel"><div class="panel-header"><div><div class="eyebrow">RECENT ACCOUNT RECORDS</div><h3>Trade / income entries with estimated tax reserve</h3></div><span class="tag gray" id="pt-row-count">0 records</span></div><div class="table-scroll"><table><thead><tr><th>Time (UTC)</th><th>Strategy label</th><th>Market</th><th>Symbol</th><th>Record type</th><th>Income asset / amount</th><th>Realised PnL (USDT)</th><th>Fees (USDT)</th><th>Funding (USDT)</th><th>Tax reserve</th><th>Entry net after reserve</th></tr></thead><tbody id="pt-ledger-rows"><tr><td colspan="11" class="empty-state">No imported personal trade records.</td></tr></tbody></table></div></article>
       <div class="notice-box">Tax method: the default conservative reserve applies 30% to each positive realised-PnL ledger record and does not use losing records to reduce that reserve. India’s Income-tax Act, 2025 section 194 specifies a 30% rate for income from transfer of a virtual digital asset and restricts loss set-off/carry-forward for that income. This simple reserve is not a legal conclusion that every futures PnL record is a VDA transfer; surcharge/cess, transaction classification, acquisition cost, TDS, and other facts require separate review. The conversion is a current P2P reference, not actual historic INR proceeds.</div>
     </section>
@@ -233,7 +234,7 @@ def _it_summary_data():
               "ledger_table_available":False,
               "summary":{"record_count":0,"realized_pnl_usdt":0,"positive_realized_pnl_usdt":0,"gross_loss_usdt":0,"commission_usdt":0,"funding_usdt":0,
                 "economic_net_pnl_usdt":0,"tax_rate":_IT_TAX_RATE,"tax_reserve_usdt":0,"net_after_tax_reserve_usdt":0},
-              "by_strategy":[],"recent":[],"generated_at_utc":_it_dt.datetime.now(_it_dt.timezone.utc).isoformat()}
+              "by_strategy":[],"recent":[],"recent_trades":[],"generated_at_utc":_it_dt.datetime.now(_it_dt.timezone.utc).isoformat()}
         mappings = db.execute(_it_sa.text("""
           SELECT id,external_id,strategy_name,market_type,symbol,trade_id,income_type,transaction_time,asset,amount_asset,amount_usdt,
                  realized_pnl_usdt,commission_usdt,funding_usdt,source,created_at
@@ -279,9 +280,43 @@ def _it_summary_data():
           "symbol":r.get("symbol"),"trade_id":r.get("trade_id"),"income_type":r.get("income_type"),"asset":asset,"amount_asset":r.get("amount_asset"),
           "realized_pnl_usdt":round(pnl,8),"commission_usdt":round(commission,8),"funding_usdt":round(funding,8),
           "tax_reserve_usdt":round(reserve,8),"net_after_reserve_usdt":round(pnl+commission+funding-reserve,8),"source":r.get("source"),"included_in_usdt_totals":included_row})
+     grouped = {}
+     for r in included:
+         typ=str(r.get("income_type") or "").upper()
+         raw_trade_id=str(r.get("trade_id") or "").strip()
+         has_trade_id=bool(raw_trade_id and raw_trade_id not in ("0","None","null"))
+         # Only combine fees/funding with a realised event when Binance provides a trade ID.
+         # Otherwise preserve each event as unattributed to avoid false attribution.
+         key=(str(r.get("strategy_name") or "Unlabelled"),str(r.get("market_type") or "FUTURES"),str(r.get("symbol") or ""),raw_trade_id) if has_trade_id else ("UNATTRIBUTED",str(r.get("external_id") or r.get("id")))
+         group=grouped.setdefault(key,{"time":r.get("transaction_time"),"strategy_name":str(r.get("strategy_name") or "Unlabelled"),
+             "market_type":str(r.get("market_type") or "FUTURES"),"symbol":str(r.get("symbol") or ""),"trade_id":raw_trade_id if has_trade_id else "",
+             "group_type":"TRADE" if has_trade_id else "UNATTRIBUTED_INCOME_EVENT","record_count":0,
+             "realized_pnl_usdt":0.0,"commission_usdt":0.0,"funding_usdt":0.0,"tax_reserve_usdt":0.0,"has_realized_pnl":False})
+         group["record_count"]+=1
+         stamp=r.get("transaction_time")
+         if stamp and (not group.get("time") or stamp>group["time"]): group["time"]=stamp
+         if typ=="REALIZED_PNL":
+             event_pnl=f(r.get("realized_pnl_usdt"))
+             group["realized_pnl_usdt"]+=event_pnl
+             # Losing events do not reduce the reserve.
+             group["tax_reserve_usdt"]+=max(0.0,event_pnl)*_IT_TAX_RATE
+             group["has_realized_pnl"]=True
+         elif typ=="COMMISSION": group["commission_usdt"]+=f(r.get("commission_usdt"))
+         elif typ=="FUNDING_FEE": group["funding_usdt"]+=f(r.get("funding_usdt"))
+     recent_trades=[]
+     for group in sorted(grouped.values(),key=lambda x:str(x.get("time") or ""),reverse=True)[:500]:
+         for field in ("realized_pnl_usdt","commission_usdt","funding_usdt","tax_reserve_usdt"):
+             group[field]=round(group[field],8)
+         group["net_after_reserve_usdt"]=round(group["realized_pnl_usdt"]+group["commission_usdt"]+group["funding_usdt"]-group["tax_reserve_usdt"],8)
+         if group["group_type"]=="TRADE":
+             group["status"]="TRADE_AFTER_RESERVE_POSITIVE" if group["net_after_reserve_usdt"]>0 else "TRADE_AFTER_RESERVE_NON_POSITIVE"
+         elif group["has_realized_pnl"]:
+             group["status"]="UNATTRIBUTED_REALIZED_PNL"
+         else:
+             group["status"]="UNATTRIBUTED_COST_OR_INCOME"
     return {"has_personal_records":bool(rows),"record_count":len(rows),"included_usdt_record_count":len(included),
       "excluded_non_usdt_or_unconverted_count":max(0,len(rows)-len(included)),"tax_method":"Conservative planning reserve: 30% of each positive realised-PnL ledger event; negative events do not reduce the reserve.",
-      "summary":overall,"by_strategy":strategies,"recent":recent,"generated_at_utc":_it_dt.datetime.now(_it_dt.timezone.utc).isoformat()}
+      "summary":overall,"by_strategy":strategies,"recent":recent,"recent_trades":recent_trades,"generated_at_utc":_it_dt.datetime.now(_it_dt.timezone.utc).isoformat()}
 
 def _it_p2p_quote(trade_type):
     query = _it_urlparse.urlencode({"fiat":"INR","asset":"USDT","tradeType":trade_type})
@@ -680,6 +715,7 @@ function itRenderTax(d){
  $('#pt-row-count').textContent=(d.recent||[]).length+' recent records shown';
  $('#pt-warning').textContent=!d.has_personal_records?'No personal trade ledger imported yet. Sync Binance Futures income history with a read-only key or upload a realised-PnL CSV. No public lead-trader PnL has been included.':(get('net_after_tax_reserve_usdt')<=0?'LOSS WARNING: economic PnL after the conservative tax reserve is non-positive. Review strategy performance, fees, funding and position sizing. ':'Imported-records result is positive after the reserve in this period, but this is not a guarantee. ')+(d.excluded_non_usdt_or_unconverted_count?' '+d.excluded_non_usdt_or_unconverted_count+' records use non-USDT assets or have no conversion and are excluded from USDT totals.':'')+' Tax estimate is provisional; futures classification must be reviewed.';
  const sr=d.by_strategy||[];$('#pt-strategy-rows').innerHTML=sr.length?sr.map(x=>'<tr><td><strong>'+esc(x.strategy_name)+'</strong></td><td>'+n(x.record_count,0)+'</td><td>'+itUsdt(x.positive_realized_pnl_usdt)+'</td><td class="negative">'+itUsdt(x.gross_loss_usdt)+'</td><td>'+itUsdt(x.commission_usdt)+'</td><td>'+itUsdt(x.funding_usdt)+'</td><td>'+itUsdt(x.tax_reserve_usdt)+'</td><td class="'+colorNum(x.economic_net_pnl_usdt)+'">'+itUsdt(x.economic_net_pnl_usdt)+'</td><td class="'+colorNum(x.net_after_tax_reserve_usdt)+'">'+itUsdt(x.net_after_tax_reserve_usdt)+'</td><td>'+esc(x.status)+'</td></tr>').join(''):'<tr><td colspan="10" class="empty-state">No imported personal trade records.</td></tr>';
+  const groupedTrades=d.recent_trades||[];$('#pt-trade-rows').innerHTML=groupedTrades.length?groupedTrades.map(x=>'<tr><td>'+esc(x.time||'—')+'</td><td>'+esc(x.strategy_name||'—')+'</td><td>'+esc(x.market_type||'—')+'</td><td>'+esc(x.symbol||'—')+'</td><td>'+esc(x.group_type==='TRADE'?'Trade '+(x.trade_id||''):'Unattributed income event')+'</td><td class="'+colorNum(x.realized_pnl_usdt)+'">'+itUsdt(x.realized_pnl_usdt)+'</td><td>'+itUsdt(x.commission_usdt)+'</td><td>'+itUsdt(x.funding_usdt)+'</td><td>'+itUsdt(x.tax_reserve_usdt)+'</td><td class="'+colorNum(x.net_after_reserve_usdt)+'">'+itUsdt(x.net_after_reserve_usdt)+'</td><td>'+esc(x.status||'—')+'</td></tr>').join(''):'<tr><td colspan="11" class="empty-state">No imported personal trade records.</td></tr>';
  const recent=d.recent||[];$('#pt-ledger-rows').innerHTML=recent.length?recent.map(x=>'<tr><td>'+esc(x.time||'—')+'</td><td>'+esc(x.strategy_name||'—')+'</td><td>'+esc(x.market_type||'—')+'</td><td>'+esc(x.symbol||'—')+'</td><td>'+esc(x.income_type||'—')+'</td><td>'+esc(x.asset||'—')+' '+itMoney(x.amount_asset,6)+'</td><td class="'+colorNum(x.realized_pnl_usdt)+'">'+itUsdt(x.realized_pnl_usdt)+'</td><td>'+itUsdt(x.commission_usdt)+'</td><td>'+itUsdt(x.funding_usdt)+'</td><td>'+itUsdt(x.tax_reserve_usdt)+'</td><td class="'+colorNum(x.net_after_reserve_usdt)+'">'+itUsdt(x.net_after_reserve_usdt)+'</td></tr>').join(''):'<tr><td colspan="11" class="empty-state">No imported personal trade records. Connect a read-only key or import CSV.</td></tr>';
  itLoadStrategyWatch(d);
 }
