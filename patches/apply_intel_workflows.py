@@ -280,40 +280,41 @@ def _it_summary_data():
           "symbol":r.get("symbol"),"trade_id":r.get("trade_id"),"income_type":r.get("income_type"),"asset":asset,"amount_asset":r.get("amount_asset"),
           "realized_pnl_usdt":round(pnl,8),"commission_usdt":round(commission,8),"funding_usdt":round(funding,8),
           "tax_reserve_usdt":round(reserve,8),"net_after_reserve_usdt":round(pnl+commission+funding-reserve,8),"source":r.get("source"),"included_in_usdt_totals":included_row})
-     grouped = {}
-     for r in included:
-         typ=str(r.get("income_type") or "").upper()
-         raw_trade_id=str(r.get("trade_id") or "").strip()
-         has_trade_id=bool(raw_trade_id and raw_trade_id not in ("0","None","null"))
-         # Only combine fees/funding with a realised event when Binance provides a trade ID.
-         # Otherwise preserve each event as unattributed to avoid false attribution.
-         key=(str(r.get("strategy_name") or "Unlabelled"),str(r.get("market_type") or "FUTURES"),str(r.get("symbol") or ""),raw_trade_id) if has_trade_id else ("UNATTRIBUTED",str(r.get("external_id") or r.get("id")))
-         group=grouped.setdefault(key,{"time":r.get("transaction_time"),"strategy_name":str(r.get("strategy_name") or "Unlabelled"),
-             "market_type":str(r.get("market_type") or "FUTURES"),"symbol":str(r.get("symbol") or ""),"trade_id":raw_trade_id if has_trade_id else "",
-             "group_type":"TRADE" if has_trade_id else "UNATTRIBUTED_INCOME_EVENT","record_count":0,
-             "realized_pnl_usdt":0.0,"commission_usdt":0.0,"funding_usdt":0.0,"tax_reserve_usdt":0.0,"has_realized_pnl":False})
-         group["record_count"]+=1
-         stamp=r.get("transaction_time")
-         if stamp and (not group.get("time") or stamp>group["time"]): group["time"]=stamp
-         if typ=="REALIZED_PNL":
-             event_pnl=f(r.get("realized_pnl_usdt"))
-             group["realized_pnl_usdt"]+=event_pnl
-             # Losing events do not reduce the reserve.
-             group["tax_reserve_usdt"]+=max(0.0,event_pnl)*_IT_TAX_RATE
-             group["has_realized_pnl"]=True
-         elif typ=="COMMISSION": group["commission_usdt"]+=f(r.get("commission_usdt"))
-         elif typ=="FUNDING_FEE": group["funding_usdt"]+=f(r.get("funding_usdt"))
-     recent_trades=[]
-     for group in sorted(grouped.values(),key=lambda x:str(x.get("time") or ""),reverse=True)[:500]:
-         for field in ("realized_pnl_usdt","commission_usdt","funding_usdt","tax_reserve_usdt"):
-             group[field]=round(group[field],8)
-         group["net_after_reserve_usdt"]=round(group["realized_pnl_usdt"]+group["commission_usdt"]+group["funding_usdt"]-group["tax_reserve_usdt"],8)
-         if group["group_type"]=="TRADE":
-             group["status"]="TRADE_AFTER_RESERVE_POSITIVE" if group["net_after_reserve_usdt"]>0 else "TRADE_AFTER_RESERVE_NON_POSITIVE"
-         elif group["has_realized_pnl"]:
-             group["status"]="UNATTRIBUTED_REALIZED_PNL"
-         else:
-             group["status"]="UNATTRIBUTED_COST_OR_INCOME"
+    grouped = {}
+    for r in included:
+        typ=str(r.get("income_type") or "").upper()
+        raw_trade_id=str(r.get("trade_id") or "").strip()
+        has_trade_id=bool(raw_trade_id and raw_trade_id not in ("0","None","null"))
+        # Only combine fees/funding with a realised event when Binance provides a trade ID.
+        # Otherwise preserve each event as unattributed to avoid false attribution.
+        key=(str(r.get("strategy_name") or "Unlabelled"),str(r.get("market_type") or "FUTURES"),str(r.get("symbol") or ""),raw_trade_id) if has_trade_id else ("UNATTRIBUTED",str(r.get("external_id") or r.get("id")))
+        group=grouped.setdefault(key,{"time":r.get("transaction_time"),"strategy_name":str(r.get("strategy_name") or "Unlabelled"),
+            "market_type":str(r.get("market_type") or "FUTURES"),"symbol":str(r.get("symbol") or ""),"trade_id":raw_trade_id if has_trade_id else "",
+            "group_type":"TRADE" if has_trade_id else "UNATTRIBUTED_INCOME_EVENT","record_count":0,
+            "realized_pnl_usdt":0.0,"commission_usdt":0.0,"funding_usdt":0.0,"tax_reserve_usdt":0.0,"has_realized_pnl":False})
+        group["record_count"]+=1
+        stamp=r.get("transaction_time")
+        if stamp and (not group.get("time") or stamp>group["time"]): group["time"]=stamp
+        if typ=="REALIZED_PNL":
+            event_pnl=f(r.get("realized_pnl_usdt"))
+            group["realized_pnl_usdt"]+=event_pnl
+            # Losing events do not reduce the reserve.
+            group["tax_reserve_usdt"]+=max(0.0,event_pnl)*_IT_TAX_RATE
+            group["has_realized_pnl"]=True
+        elif typ=="COMMISSION": group["commission_usdt"]+=f(r.get("commission_usdt"))
+        elif typ=="FUNDING_FEE": group["funding_usdt"]+=f(r.get("funding_usdt"))
+    recent_trades=[]
+    for group in sorted(grouped.values(),key=lambda x:str(x.get("time") or ""),reverse=True)[:500]:
+        for field in ("realized_pnl_usdt","commission_usdt","funding_usdt","tax_reserve_usdt"):
+            group[field]=round(group[field],8)
+        group["net_after_reserve_usdt"]=round(group["realized_pnl_usdt"]+group["commission_usdt"]+group["funding_usdt"]-group["tax_reserve_usdt"],8)
+        if group["group_type"]=="TRADE":
+            group["status"]="TRADE_AFTER_RESERVE_POSITIVE" if group["net_after_reserve_usdt"]>0 else "TRADE_AFTER_RESERVE_NON_POSITIVE"
+        elif group["has_realized_pnl"]:
+            group["status"]="UNATTRIBUTED_REALIZED_PNL"
+        else:
+            group["status"]="UNATTRIBUTED_COST_OR_INCOME"
+        recent_trades.append(group)
     return {"has_personal_records":bool(rows),"record_count":len(rows),"included_usdt_record_count":len(included),
       "excluded_non_usdt_or_unconverted_count":max(0,len(rows)-len(included)),"tax_method":"Conservative planning reserve: 30% of each positive realised-PnL ledger event; negative events do not reduce the reserve.",
       "summary":overall,"by_strategy":strategies,"recent":recent,"recent_trades":recent_trades,"generated_at_utc":_it_dt.datetime.now(_it_dt.timezone.utc).isoformat()}
