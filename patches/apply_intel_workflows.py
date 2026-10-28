@@ -180,8 +180,19 @@ def _it_upsert(records):
     return inserted
 
 def _it_summary_data():
-    _it_ensure_ledger()
     with SessionLocal() as db:
+        dialect = db.get_bind().dialect.name
+        if dialect == "postgresql":
+            exists = db.execute(_it_sa.text("SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='account_trade_ledger')")).scalar()
+        else:
+            exists = db.execute(_it_sa.text("SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type='table' AND name='account_trade_ledger')")).scalar()
+        if not exists:
+            return {"has_personal_records":False,"record_count":0,"included_usdt_record_count":0,"excluded_non_usdt_or_unconverted_count":0,
+              "tax_method":"Conservative planning reserve: 30% of each positive realised-PnL ledger event; negative events do not reduce the reserve.",
+              "ledger_table_available":False,
+              "summary":{"record_count":0,"realized_pnl_usdt":0,"positive_realized_pnl_usdt":0,"gross_loss_usdt":0,"commission_usdt":0,"funding_usdt":0,
+                "economic_net_pnl_usdt":0,"tax_rate":_IT_TAX_RATE,"tax_reserve_usdt":0,"net_after_tax_reserve_usdt":0},
+              "by_strategy":[],"recent":[],"generated_at_utc":_it_dt.datetime.now(_it_dt.timezone.utc).isoformat()}
         mappings = db.execute(_it_sa.text("""
           SELECT id,external_id,strategy_name,market_type,symbol,trade_id,income_type,transaction_time,asset,amount_asset,amount_usdt,
                  realized_pnl_usdt,commission_usdt,funding_usdt,source,created_at
@@ -379,7 +390,7 @@ def api_it_tax_import():
             stamp = value("time","timestamp","date","datetime","transaction time","create time")
             symbol = str(value("symbol","pair","market") or "")
             trade_id = str(value("trade id","tradeid","tran id","tranid","transaction id","order id","id") or "")
-            fingerprint = _it_hashlib.sha256((_it_json.dumps(source_row,sort_keys=True,ensure_ascii=False)+"|"+str(line_no)).encode("utf-8")).hexdigest()
+            fingerprint = _it_hashlib.sha256((_it_json.dumps(source_row,sort_keys=True,ensure_ascii=False)).encode("utf-8")).hexdigest()
             ext = "CSV_IMPORT:"+fingerprint
             if typ=="COST_ONLY":
                 if commission != 0: typ="COMMISSION"
@@ -464,80 +475,116 @@ def api_it_trade_behaviour_summary():
     except Exception as exc:
         return jsonify({"error":"Trade-behaviour analysis failed: "+str(exc)[:300]}),500
 
-# Tighten multi-trader ranking: negative/missing copier PnL and too-short tenure are blocked, not ranked as safe.
-try:
-    _it_original_mt_report = _mt_report
-    def _mt_report(market_type="FUTURES", min_closed_trades=10, min_profit_factor=1.2, max_mdd_pct=20, min_roi_7d=-5, max_selected=5):
-        report = _it_original_mt_report(market_type,min_closed_trades,min_profit_factor,max_mdd_pct,min_roi_7d,max_selected)
-        rows = report.get("candidates") or []
-        ids = [int(x["id"]) for x in rows if x.get("id") is not None]
-        with SessionLocal() as db:
-            source = list(db.scalars(select(Trader).where(Trader.id.in_(ids)))) if ids else []
-        source_by_id = {int(t.id):t for t in source}
-        for row in rows:
-            t = source_by_id.get(int(row.get("id") or 0))
-            reasons = list(row.get("reasons") or [])
-            duration = None
-            if t is not None:
-                try:
-                    start = int(t.start_time_ms or 0)
-                    if start > 0: duration = max(0.0,(_it_time.time()*1000-start)/86400000.0)
-                except Exception: duration=None
-                copier = _it_float(t.copier_pnl,None)
-                row["copier_pnl"] = copier
-                row["trader_duration_days"] = round(duration,2) if duration is not None else None
-                row["profile_url"] = t.profile_url
-            else:
-                copier = None
-                row["copier_pnl"] = None
-                row["trader_duration_days"] = None
-            if duration is None: reasons.append("MISSING_TRADER_DURATION")
-            elif duration < 30: reasons.append("INSUFFICIENT_TRADER_TENURE_UNDER_30_DAYS")
-            if copier is None: reasons.append("MISSING_COPIER_PNL")
-            elif copier <= 0: reasons.append("COPIER_PNL_NOT_POSITIVE")
-            score = _it_float(row.get("score"),0)
-            if duration is not None: score += min(15.0, max(0.0,duration/365.0*15.0))
-            if copier is not None and copier > 0: score += min(15.0,_it_math.log1p(copier)*2.0)
-            if row.get("mdd_365d") is None: score -= 5.0
-            row["score"] = round(max(0.0,min(100.0,score)),2)
-            row["reasons"] = list(dict.fromkeys(reasons))
-            row["eligible"] = not row["reasons"]
-            row["selected"] = False
-        eligible = [x for x in rows if x.get("eligible")]
-        chosen = []
-        try: max_n = max(1,min(10,int(max_selected)))
-        except Exception: max_n = 5
-        while eligible and len(chosen) < max_n:
-            def adjusted(x):
-                syms=set(x.get("symbols") or [])
-                overlap=0.0
-                for y in chosen:
-                    ys=set(y.get("symbols") or [])
-                    union=syms|ys
-                    if union: overlap=max(overlap,len(syms & ys)/len(union))
-                return _it_float(x.get("score"),0)-overlap*18.0
-            best=max(eligible,key=adjusted)
-            best["selected"]=True
-            best["selection_reason"]="Risk score with duration/copier-PnL score and historical-symbol overlap penalty"
-            chosen.append(best); eligible.remove(best)
-        for item in chosen:
-            item["allocation_pct"]=0.0
-        if chosen:
-            weights={str(x["id"]):max(1.0,_it_float(x.get("score"),1))/max(5.0,abs(_it_float(x.get("mdd_30d"),20))) for x in chosen}
-            total=sum(weights.values()) or 1.0
-            for x in chosen: x["allocation_pct"]=round(min(35.0,100.0*weights[str(x["id"])]/total),2)
-        chosen_ids={int(x["id"]) for x in chosen}
-        for row in rows:
-            row["decision"]="SELECTED_FOR_PAPER_MODE" if int(row.get("id") or 0) in chosen_ids else ("ELIGIBLE_NOT_SELECTED" if row.get("eligible") else "BLOCKED")
-        report["monitored_count"]=len(rows)
-        report["eligible_count"]=sum(1 for x in rows if x.get("eligible"))
-        report["blocked_count"]=sum(1 for x in rows if not x.get("eligible"))
-        report["selected_count"]=len(chosen)
-        report["selected_portfolios"]=[{k:x.get(k) for k in ("id","nickname","portfolio_id","profile_url","score","allocation_pct","mdd_7d","mdd_30d","mdd_365d","roi_7d","roi_30d","roi_90d","profit_factor","copier_pnl","trader_duration_days","stored_closed_trades","symbols","selection_reason")} for x in chosen]
-        report["policy_notes"]=["A profile is blocked if trader tenure is under 30 days or copier PnL is missing/non-positive.","Scores include duration and positive copier PnL; missing 365D MDD is penalised.","This output is a paper-research shortlist, not a live copy instruction or profit guarantee."]
-        return report
-except Exception:
-    pass
+# Tighten ranking using bounded SQL aggregates; never materialize every Position ORM object.
+def _mt_report(market_type="FUTURES", min_closed_trades=10, min_profit_factor=1.2, max_mdd_pct=20, min_roi_7d=-5, max_selected=5):
+    market_type=(market_type or "FUTURES").upper()
+    if market_type not in ("FUTURES","SPOT"): raise ValueError("market_type must be FUTURES or SPOT")
+    min_closed_trades=max(1,min(int(min_closed_trades),500)); min_profit_factor=max(.5,min(float(min_profit_factor),10))
+    max_mdd_pct=max(1,min(float(max_mdd_pct),100)); min_roi_7d=max(-100,min(float(min_roi_7d),100)); max_selected=max(1,min(int(max_selected),10))
+    with SessionLocal() as db:
+        traders=list(db.scalars(select(Trader).where(Trader.exchange=="BINANCE",Trader.market_type==market_type).order_by(Trader.last_seen.desc().nullslast(),Trader.id.asc())))
+        aggregate_rows=db.execute(_it_sa.text("""
+            SELECT p.trader_id, COUNT(*) AS closed_count,
+              SUM(CASE WHEN p.close_pnl>0 THEN 1 ELSE 0 END) AS wins,
+              SUM(CASE WHEN p.close_pnl<0 THEN 1 ELSE 0 END) AS losses,
+              SUM(CASE WHEN p.close_pnl>0 THEN p.close_pnl ELSE 0 END) AS gross_profit,
+              SUM(CASE WHEN p.close_pnl<0 THEN ABS(p.close_pnl) ELSE 0 END) AS gross_loss,
+              SUM(p.close_pnl) AS net_pnl,
+              AVG(p.mae_pct) AS avg_mae_pct, AVG(p.mfe_pct) AS avg_mfe_pct,
+              SUM(CASE WHEN p.mae_pct IS NOT NULL OR p.mfe_pct IS NOT NULL THEN 1 ELSE 0 END) AS path_count
+            FROM positions p JOIN traders t ON t.id=p.trader_id
+            WHERE t.exchange='BINANCE' AND t.market_type=:market_type AND p.close_pnl IS NOT NULL
+            GROUP BY p.trader_id
+        """),{"market_type":market_type}).mappings().all()
+        stats={int(r["trader_id"]):dict(r) for r in aggregate_rows}
+        symbol_rows=db.execute(_it_sa.text("""
+            SELECT p.trader_id,p.symbol FROM positions p JOIN traders t ON t.id=p.trader_id
+            WHERE t.exchange='BINANCE' AND t.market_type=:market_type AND p.close_pnl IS NOT NULL
+              AND p.symbol IS NOT NULL AND p.closed_ms >= :since_ms
+            GROUP BY p.trader_id,p.symbol
+        """),{"market_type":market_type,"since_ms":int((_it_time.time()-90*86400)*1000)}).mappings().all()
+        symbols={}
+        for r in symbol_rows: symbols.setdefault(int(r["trader_id"]),[]).append(str(r["symbol"]))
+    now=utcnow(); rows=[]
+    for t in traders:
+        try: periods=json.loads(t.period_metrics or "{}")
+        except Exception: periods={}
+        def pm(period,metric):
+            group=periods.get(period,{}) if isinstance(periods,dict) else {}
+            return _mt_float(group.get(metric)) if isinstance(group,dict) else None
+        roi7,roi30,roi90,roi365=[pm(k,"roi") for k in ("7D","30D","90D","365D")]
+        mdd7,mdd30,mdd365=[pm(k,"mdd") for k in ("7D","30D","365D")]
+        z=stats.get(int(t.id),{})
+        closed=int(z.get("closed_count") or 0); wins=int(z.get("wins") or 0); losses=int(z.get("losses") or 0)
+        gp=_mt_float(z.get("gross_profit"),0) or 0; gl=_mt_float(z.get("gross_loss"),0) or 0
+        pf=gp/gl if gl>0 else None
+        net=_mt_float(z.get("net_pnl"),0) or 0
+        seen=t.last_seen
+        if seen and getattr(seen,"tzinfo",None) is not None: seen=seen.replace(tzinfo=None)
+        age=(now-seen).total_seconds()/86400 if seen else None
+        reasons=[]
+        if age is None or age>7: reasons.append("STALE_PROFILE_OVER_7_DAYS")
+        if roi7 is None: reasons.append("MISSING_SOURCE_7D_ROI")
+        if mdd7 is None: reasons.append("MISSING_SOURCE_7D_MDD")
+        if mdd30 is None: reasons.append("MISSING_SOURCE_30D_MDD")
+        if roi7 is not None and roi7<min_roi_7d: reasons.append("RECENT_ROI_BELOW_FLOOR")
+        if mdd7 is not None and abs(mdd7)>max_mdd_pct: reasons.append("7D_MDD_LIMIT_EXCEEDED")
+        if mdd30 is not None and abs(mdd30)>max_mdd_pct: reasons.append("30D_MDD_LIMIT_EXCEEDED")
+        if closed<min_closed_trades: reasons.append("INSUFFICIENT_STORED_CLOSED_TRADES")
+        if pf is None: reasons.append("PROFIT_FACTOR_NOT_ESTIMABLE_FROM_STORED_TRADES")
+        elif pf<min_profit_factor: reasons.append("PROFIT_FACTOR_BELOW_FLOOR")
+        duration=None
+        try:
+            start_ms=int(t.start_time_ms or 0)
+            if start_ms>0: duration=max(0.0,(_it_time.time()*1000-start_ms)/86400000.0)
+        except Exception: duration=None
+        copier=_mt_float(t.copier_pnl)
+        if duration is None: reasons.append("MISSING_TRADER_DURATION")
+        elif duration<30: reasons.append("INSUFFICIENT_TRADER_TENURE_UNDER_30_DAYS")
+        if copier is None: reasons.append("MISSING_COPIER_PNL")
+        elif copier<=0: reasons.append("COPIER_PNL_NOT_POSITIVE")
+        score=50+max(-20,min(20,roi7 or 0))*.7+max(-30,min(30,roi30 or 0))*.35+max(-50,min(50,roi90 or 0))*.1
+        score+=(min(pf,3)-1)*10 if pf is not None else -12
+        score-=abs(mdd30)*.45 if mdd30 is not None else 15
+        if duration is not None: score+=min(15.0,max(0.0,duration/365.0*15.0))
+        if copier is not None and copier>0: score+=min(15.0,_it_math.log1p(copier)*2.0)
+        if mdd365 is None: score-=5.0
+        syms=symbols.get(int(t.id),[])
+        rows.append({"id":t.id,"nickname":t.nickname,"portfolio_id":t.portfolio_id,"profile_url":t.profile_url,"market_type":t.market_type,
+            "last_seen":_iso(t.last_seen),"age_days":round(age,2) if age is not None else None,
+            "trader_duration_days":round(duration,2) if duration is not None else None,"roi_7d":roi7,"roi_30d":roi30,"roi_90d":roi90,"roi_365d":roi365,
+            "mdd_7d":mdd7,"mdd_30d":mdd30,"mdd_365d":mdd365,"stored_closed_trades":closed,"source_total_positions":t.total_positions,
+            "profit_factor":round(pf,4) if pf is not None else None,"win_rate_pct":round(100*wins/(wins+losses),2) if wins+losses else None,
+            "net_realized_pnl":round(net,8),"average_win":round(gp/wins,8) if wins else None,"average_loss":round(gl/losses,8) if losses else None,
+            "stored_path_coverage_pct":round(100*int(z.get("path_count") or 0)/closed,2) if closed else 0,
+            "symbols":syms,"copier_pnl":copier,"score":round(max(0,min(100,score)),2),"eligible":not reasons,"reasons":list(dict.fromkeys(reasons)),
+            "selected":False,"allocation_pct":0})
+    rows.sort(key=lambda x:(x["eligible"],x["score"],x["stored_closed_trades"]),reverse=True)
+    eligible=[x for x in rows if x["eligible"]]; chosen=[]
+    while eligible and len(chosen)<max_selected:
+        def adjusted(x):
+            syms=set(x.get("symbols") or []); overlap=0.0
+            for y in chosen:
+                ys=set(y.get("symbols") or []); union=syms|ys
+                if union: overlap=max(overlap,len(syms & ys)/len(union))
+            return _mt_float(x.get("score"),0)-overlap*18
+        best=max(eligible,key=adjusted)
+        best["selected"]=True; best["selection_reason"]="Risk score includes duration/copier PnL and recent symbol-overlap penalty"
+        chosen.append(best); eligible.remove(best)
+    if chosen:
+        weights={str(x["id"]):max(1.0,_mt_float(x.get("score"),1))/max(5.0,abs(_mt_float(x.get("mdd_30d"),max_mdd_pct))) for x in chosen}
+        total=sum(weights.values()) or 1
+        for x in chosen: x["allocation_pct"]=round(min(35.0,100*weights[str(x["id"])]/total),2)
+    chosen_ids={int(x["id"]) for x in chosen}
+    for row in rows:
+        row["decision"]="SELECTED_FOR_PAPER_MODE" if int(row["id"]) in chosen_ids else ("ELIGIBLE_NOT_SELECTED" if row["eligible"] else "BLOCKED")
+        if row["eligible"] and not row["selected"]: row["selection_reason"]="Eligible but outside the paper shortlist limit"
+    return {"mode":"PAPER_ONLY_NO_ORDERS","market_type":market_type,"evaluated_at_utc":utcnow().isoformat()+"Z",
+        "monitored_count":len(rows),"eligible_count":sum(x["eligible"] for x in rows),"blocked_count":sum(not x["eligible"] for x in rows),
+        "selected_count":len(chosen),"selected_portfolios":[{k:x.get(k) for k in ("id","nickname","portfolio_id","profile_url","score","allocation_pct","roi_7d","roi_30d","roi_90d","mdd_7d","mdd_30d","mdd_365d","profit_factor","copier_pnl","trader_duration_days","stored_closed_trades","symbols","selection_reason")} for x in chosen],
+        "candidates":rows[:1000],"candidate_rows_returned":min(1000,len(rows)),"candidates_omitted_from_response":max(0,len(rows)-1000),
+        "settings":{"min_closed_trades":min_closed_trades,"min_profit_factor":min_profit_factor,"max_mdd_pct":max_mdd_pct,"min_roi_7d":min_roi_7d,"max_selected":max_selected},
+        "policy_notes":["A profile is blocked if trader tenure is under 30 days or copier PnL is missing/non-positive.","Scores incorporate duration and copier PnL; missing 365D MDD is penalised.","This is a paper-research shortlist, not a live copy instruction or profit guarantee."]}
 '''
 insert_once(app, 'def _run_scheduled_task(kind, market_type, target, args):', backend + '\n', 'def _it_ensure_ledger():', "account ledger and analysis endpoints")
 
@@ -633,7 +680,7 @@ else:
     if count != 1: raise RuntimeError("Could not wire the new workflow routes")
     s = s2
 timer_old = "state.refreshTimer=setInterval(()=>{refreshStatus();loadRunsOnly();if(state.view==='multi-trader')loadMultiTrader(false);if(state.view==='traders')loadTraders();if(state.view==='history')loadPaths();},30000)"
-timer_new = "state.refreshTimer=setInterval(()=>{refreshStatus();loadRunsOnly();if(state.view==='multi-trader')loadMultiTrader(false);if(state.view==='portfolio-lab')itLoadPortfolioLab();if(state.view==='profit-tax'||state.view==='strategy-watch')itLoadProfitTax();if(state.view==='traders')loadTraders();if(state.view==='history'){loadPaths();itLoadTradeBehaviour()}},30000)"
+timer_new = "state.refreshTimer=setInterval(()=>{refreshStatus();loadRunsOnly()},30000)"
 if timer_old in s:
     s = s.replace(timer_old,timer_new,1)
 js.write_text(s)
