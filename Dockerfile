@@ -10,6 +10,7 @@ RUN apt-get update \
     && python /tmp/patches/apply_runtime_fixes.py \
     && python /tmp/patches/apply_multi_trader_mode.py \
     && python /tmp/patches/apply_intel_workflows.py \
+    && python -m py_compile /app/app.py \
     && rm -rf /tmp/bundle /tmp/patches \
     && pip install --no-cache-dir -r /app/requirements.txt
 EXPOSE 10000
