@@ -7,6 +7,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends tar xz-utils \
     && rm -rf /var/lib/apt/lists/* \
     && cat /tmp/bundle/part* | base64 -d | tar -xJ -C /app \
+    && python -m py_compile /tmp/patches/apply_runtime_fixes.py /tmp/patches/apply_multi_trader_mode.py /tmp/patches/apply_intel_workflows.py \
     && python /tmp/patches/apply_runtime_fixes.py \
     && python /tmp/patches/apply_multi_trader_mode.py \
     && python /tmp/patches/apply_intel_workflows.py \
