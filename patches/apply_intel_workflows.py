@@ -590,6 +590,30 @@ def _mt_report(market_type="FUTURES", min_closed_trades=10, min_profit_factor=1.
 '''
 insert_once(app, 'def _run_scheduled_task(kind, market_type, target, args):', backend + '\n', 'def _it_ensure_ledger():', "account ledger and analysis endpoints")
 
+# Return computed ranking even if a full database prevents saving its optional snapshot.
+patch(app,
+'''@app.post("/api/multi-trader/evaluate")
+def api_multi_trader_evaluate():
+    data=request.get_json(silent=True) or {}
+    try:
+        report=_mt_report(data.get("market_type","FUTURES"),data.get("min_closed_trades",10),data.get("min_profit_factor",1.2),data.get("max_mdd_pct",20),data.get("min_roi_7d",-5),data.get("max_selected",5))
+        report["evaluation_id"]=_persist_mt_report(report,"MANUAL")
+        return jsonify(report)
+    except Exception as exc: return jsonify({"error":str(exc)}),400''',
+'''@app.post("/api/multi-trader/evaluate")
+def api_multi_trader_evaluate():
+    data=request.get_json(silent=True) or {}
+    try:
+        report=_mt_report(data.get("market_type","FUTURES"),data.get("min_closed_trades",10),data.get("min_profit_factor",1.2),data.get("max_mdd_pct",20),data.get("min_roi_7d",-5),data.get("max_selected",5))
+    except Exception as exc: return jsonify({"error":str(exc)}),400
+    try:
+        report["evaluation_id"]=_persist_mt_report(report,"MANUAL")
+    except Exception as exc:
+        report["evaluation_id"]=None
+        report["persistence_warning"]="Analysis completed, but the database could not save its snapshot: "+str(exc)[:250]
+    return jsonify(report)''',
+"allow ranking without persisted snapshot")
+
 # Make JS routes call real data-backed workflows, including an enhanced Trade behaviour summary.
 js = ROOT / "static" / "app.js"
 js_code = r'''
@@ -681,6 +705,10 @@ else:
     s2, count = re.subn(pattern,new_route,s,count=1)
     if count != 1: raise RuntimeError("Could not wire the new workflow routes")
     s = s2
+s = s.replace(
+  'if(persist)toast("Evaluation saved #"+d.evaluation_id+": "+d.selected_count+" selected; "+d.blocked_count+" blocked/incomplete.","success")',
+  'if(persist){if(d.evaluation_id)toast("Evaluation saved #"+d.evaluation_id+": "+d.selected_count+" selected; "+d.blocked_count+" blocked/incomplete.","success");else toast("Analysis computed, but snapshot could not be saved: "+(d.persistence_warning||"database storage unavailable"),"error")}'
+)
 timer_old = "state.refreshTimer=setInterval(()=>{refreshStatus();loadRunsOnly();if(state.view==='multi-trader')loadMultiTrader(false);if(state.view==='traders')loadTraders();if(state.view==='history')loadPaths();},30000)"
 timer_new = "state.refreshTimer=setInterval(()=>{refreshStatus();loadRunsOnly()},30000)"
 if timer_old in s:
