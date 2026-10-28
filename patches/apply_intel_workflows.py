@@ -524,10 +524,12 @@ def _mt_report(market_type="FUTURES", min_closed_trades=10, min_profit_factor=1.
         age=(now-seen).total_seconds()/86400 if seen else None
         reasons=[]
         if age is None or age>7: reasons.append("STALE_PROFILE_OVER_7_DAYS")
-        if roi7 is None: reasons.append("MISSING_SOURCE_7D_ROI")
-        if mdd7 is None: reasons.append("MISSING_SOURCE_7D_MDD")
+        if market_type=="FUTURES" and roi7 is None: reasons.append("MISSING_SOURCE_7D_ROI")
+        if market_type=="FUTURES" and mdd7 is None: reasons.append("MISSING_SOURCE_7D_MDD")
+        if market_type=="SPOT" and roi30 is None: reasons.append("MISSING_SOURCE_30D_ROI_FOR_SPOT")
         if mdd30 is None: reasons.append("MISSING_SOURCE_30D_MDD")
-        if roi7 is not None and roi7<min_roi_7d: reasons.append("RECENT_ROI_BELOW_FLOOR")
+        recent_roi = roi7 if roi7 is not None else roi30
+        if recent_roi is not None and recent_roi<min_roi_7d: reasons.append("RECENT_ROI_BELOW_FLOOR")
         if mdd7 is not None and abs(mdd7)>max_mdd_pct: reasons.append("7D_MDD_LIMIT_EXCEEDED")
         if mdd30 is not None and abs(mdd30)>max_mdd_pct: reasons.append("30D_MDD_LIMIT_EXCEEDED")
         if closed<min_closed_trades: reasons.append("INSUFFICIENT_STORED_CLOSED_TRADES")
@@ -543,7 +545,7 @@ def _mt_report(market_type="FUTURES", min_closed_trades=10, min_profit_factor=1.
         elif duration<30: reasons.append("INSUFFICIENT_TRADER_TENURE_UNDER_30_DAYS")
         if copier is None: reasons.append("MISSING_COPIER_PNL")
         elif copier<=0: reasons.append("COPIER_PNL_NOT_POSITIVE")
-        score=50+max(-20,min(20,roi7 or 0))*.7+max(-30,min(30,roi30 or 0))*.35+max(-50,min(50,roi90 or 0))*.1
+        score=50+max(-20,min(20,recent_roi or 0))*.7+max(-30,min(30,roi30 or 0))*.35+max(-50,min(50,roi90 or 0))*.1
         score+=(min(pf,3)-1)*10 if pf is not None else -12
         score-=abs(mdd30)*.45 if mdd30 is not None else 15
         if duration is not None: score+=min(15.0,max(0.0,duration/365.0*15.0))
