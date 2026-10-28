@@ -11,6 +11,14 @@ def insert_once(path, anchor, payload, marker, label):
         raise RuntimeError(f"Cannot install {label}: anchor not found")
     path.write_text(s.replace(anchor, payload + anchor, 1))
 
+def patch(path, old, new, label):
+    source = path.read_text()
+    if new in source:
+        return
+    if old not in source:
+        raise RuntimeError(f"Cannot install {label}: source anchor not found")
+    path.write_text(source.replace(old, new, 1))
+
 # Add missing workflows without changing the archived CoinDCX application/repository.
 html = ROOT / "templates" / "index.html"
 # Reuse the existing Portfolio Lab view and nav route when the base bundle already has one.
