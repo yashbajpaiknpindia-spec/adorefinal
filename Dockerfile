@@ -9,6 +9,7 @@ RUN apt-get update \
     && cat /tmp/bundle/part* | base64 -d | tar -xJ -C /app \
     && python /tmp/patches/apply_runtime_fixes.py \
     && python /tmp/patches/apply_multi_trader_mode.py \
+    && python /tmp/patches/apply_intel_workflows.py \
     && rm -rf /tmp/bundle /tmp/patches \
     && pip install --no-cache-dir -r /app/requirements.txt
 EXPOSE 10000
