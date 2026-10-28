@@ -628,7 +628,7 @@ def _mt_report(market_type="FUTURES", min_closed_trades=10, min_profit_factor=1.
             start_ms=int(t.start_time_ms or 0)
             if start_ms>0: duration=max(0.0,(_it_time.time()*1000-start_ms)/86400000.0)
         except Exception: duration=None
-        copier=_it_float(t.copier_pnl)
+        copier=_it_float(t.copier_pnl,None) if t.copier_pnl is not None else None
         if duration is None: reasons.append("MISSING_TRADER_DURATION")
         elif duration<30: reasons.append("INSUFFICIENT_TRADER_TENURE_UNDER_30_DAYS")
         if copier is None: reasons.append("MISSING_COPIER_PNL")
