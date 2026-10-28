@@ -13,8 +13,24 @@ def insert_once(path, anchor, payload, marker, label):
 
 # Add missing workflows without changing the archived CoinDCX application/repository.
 html = ROOT / "templates" / "index.html"
-nav = '''    <button class="nav-link" data-view="portfolio-lab"><span class="nav-ico">↗</span> Portfolio Lab</button>
+# Reuse the existing Portfolio Lab view and nav route when the base bundle already has one.
+html_before = html.read_text()
+if 'data-view="portfolio"' in html_before or 'id="view-portfolio"' in html_before:
+    portfolio_view_id, portfolio_view_key = "view-portfolio", "portfolio"
+elif 'data-view="portfolio-lab"' in html_before or 'id="view-portfolio-lab"' in html_before:
+    portfolio_view_id, portfolio_view_key = "view-portfolio-lab", "portfolio-lab"
+else:
+    portfolio_view_id, portfolio_view_key = "view-portfolio-lab", "portfolio-lab"
+
+if 'data-view="profit-tax"' in html_before:
+    nav = ""
+else:
+    nav = f'''    <button class="nav-link" data-view="{portfolio_view_key}"><span class="nav-ico">↗</span> Portfolio Lab</button>
     <button class="nav-link" data-view="profit-tax"><span class="nav-ico">₹</span> Profit & Tax Centre</button>
+    <button class="nav-link" data-view="strategy-watch"><span class="nav-ico">◉</span> Strategy Tax Watch</button>
+'''
+    if 'data-view="' + portfolio_view_key + '"' in html_before:
+        nav = '''    <button class="nav-link" data-view="profit-tax"><span class="nav-ico">₹</span> Profit & Tax Centre</button>
     <button class="nav-link" data-view="strategy-watch"><span class="nav-ico">◉</span> Strategy Tax Watch</button>
 '''
 insert_once(html, '    <button class="nav-link" data-view="reports">', nav, 'data-view="profit-tax"', "navigation")
@@ -84,6 +100,31 @@ pages = r"""
       <div class="notice-box">A strategy can become unprofitable after fees, funding, slippage, and a tax reserve even when its headline ROI is positive. A warning is a reason to investigate or pause new allocation, not an automatic order action. No system can guarantee that you will always remain profitable.</div>
     </section>
 """
+# Replace the old blank Portfolio Lab page in place instead of creating a duplicate view.
+portfolio_start = pages.index('    <section class="view" id="view-portfolio-lab">')
+tax_start = pages.index('    <section class="view" id="view-profit-tax">')
+portfolio_section = pages[portfolio_start:tax_start].replace('id="view-portfolio-lab"', f'id="{portfolio_view_id}"', 1)
+tax_pages = pages[:portfolio_start] + pages[tax_start:]
+html_now = html.read_text()
+target_start = html_now.find(f'    <section class="view" id="{portfolio_view_id}">')
+other_id = "view-portfolio-lab" if portfolio_view_id == "view-portfolio" else "view-portfolio"
+if target_start < 0:
+    other_start = html_now.find(f'    <section class="view" id="{other_id}">')
+    if other_start >= 0:
+        target_start = other_start
+        other_id = html_now[target_start:target_start+100]
+        match = re.search(r'id="view-(?:portfolio|portfolio-lab)"', other_id)
+        if match:
+            html_now = html_now[:target_start] + html_now[target_start:].replace(match.group(0), f'id="{portfolio_view_id}"', 1)
+            target_start = html_now.find(f'    <section class="view" id="{portfolio_view_id}">')
+if target_start >= 0:
+    target_end = html_now.find('    <section class="view"', target_start + 10)
+    if target_end < 0:
+        raise RuntimeError("Cannot find the end of the existing Portfolio Lab view")
+    html.write_text(html_now[:target_start] + portfolio_section.rstrip() + '\n\n' + html_now[target_end:])
+    pages = tax_pages
+else:
+    pages = portfolio_section + tax_pages
 insert_once(html, '    <section class="view" id="view-reports">', pages, 'id="view-profit-tax"', "page sections")
 
 # Add resilient API endpoints. The public research tables are deliberately not used as personal tax records.
@@ -698,7 +739,7 @@ insert_once(js, 'async function loadSystem(){', js_code + '\n', 'function itLoad
 
 s = js.read_text()
 old_route = "const titles={overview:'Overview',traders:'Trader universe','multi-trader':'Multi-Trader Mode',history:'Trade behaviour',reports:'Reports & exports',data:'Data import',system:'Source & system'};$('#page-title').textContent=titles[name]||name;if(name==='traders')loadTraders();if(name==='multi-trader')loadMultiTrader(false);if(name==='history')loadPaths();if(name==='system')loadSystem();"
-new_route = "const titles={overview:'Overview',traders:'Trader universe','multi-trader':'Multi-Trader Mode','portfolio-lab':'Portfolio Lab','profit-tax':'Profit & Tax Centre','strategy-watch':'Strategy Tax Watch',history:'Trade behaviour',reports:'Reports & exports',data:'Data import',system:'Source & system'};$('#page-title').textContent=titles[name]||name;if(name==='traders')loadTraders();if(name==='multi-trader')loadMultiTrader(false);if(name==='portfolio-lab')itLoadPortfolioLab();if(name==='profit-tax'){itLoadP2PRates();itLoadProfitTax()}if(name==='strategy-watch')itLoadProfitTax();if(name==='history'){loadPaths();itLoadTradeBehaviour()}if(name==='system')loadSystem();"
+new_route = "const titles={overview:'Overview',traders:'Trader universe','multi-trader':'Multi-Trader Mode','portfolio':'Portfolio Lab','portfolio-lab':'Portfolio Lab','profit-tax':'Profit & Tax Centre','strategy-watch':'Strategy Tax Watch',history:'Trade behaviour',reports:'Reports & exports',data:'Data import',system:'Source & system'};$('#page-title').textContent=titles[name]||name;if(name==='traders')loadTraders();if(name==='multi-trader')loadMultiTrader(false);if(name==='portfolio-lab'||name==='portfolio')itLoadPortfolioLab();if(name==='profit-tax'){itLoadP2PRates();itLoadProfitTax()}if(name==='strategy-watch')itLoadProfitTax();if(name==='history'){loadPaths();itLoadTradeBehaviour()}if(name==='system')loadSystem();"
 if old_route in s:
     s = s.replace(old_route,new_route,1)
 else:
