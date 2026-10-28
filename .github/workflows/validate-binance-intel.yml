@@ -1,0 +1,51 @@
+name: Validate Binance Intel bundle and workflow patches
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  restore-patch-and-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Restore the bundled Flask application
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xz-utils
+          sudo mkdir -p /app
+          sudo chown "$USER":"$USER" /app
+          cat bundle/part* | base64 -d | tar -xJ -C /app
+
+      - name: Check patch scripts compile
+        run: python -m py_compile patches/apply_runtime_fixes.py patches/apply_multi_trader_mode.py patches/apply_intel_workflows.py
+
+      - name: Apply the same patches as the production Docker build
+        run: |
+          python patches/apply_runtime_fixes.py
+          python patches/apply_multi_trader_mode.py
+          python patches/apply_intel_workflows.py
+
+      - name: Compile generated backend
+        run: python -m py_compile /app/app.py
+
+      - name: Check generated client JavaScript
+        run: node --check /app/static/app.js
+
+      - name: Verify key pages and API routes exist
+        run: |
+          grep -q 'id="view-multi-trader"' /app/templates/index.html
+          grep -q 'id="view-portfolio-lab"' /app/templates/index.html
+          grep -q 'id="view-profit-tax"' /app/templates/index.html
+          grep -q 'id="view-strategy-watch"' /app/templates/index.html
+          grep -q '/api/trade-behaviour/summary' /app/app.py
+          grep -q '/api/profit-tax/sync' /app/app.py
+          echo "Page and route wiring checks passed."
