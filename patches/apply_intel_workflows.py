@@ -511,14 +511,14 @@ def _mt_report(market_type="FUTURES", min_closed_trades=10, min_profit_factor=1.
         except Exception: periods={}
         def pm(period,metric):
             group=periods.get(period,{}) if isinstance(periods,dict) else {}
-            return _mt_float(group.get(metric)) if isinstance(group,dict) else None
+            return _it_float(group.get(metric)) if isinstance(group,dict) else None
         roi7,roi30,roi90,roi365=[pm(k,"roi") for k in ("7D","30D","90D","365D")]
         mdd7,mdd30,mdd365=[pm(k,"mdd") for k in ("7D","30D","365D")]
         z=stats.get(int(t.id),{})
         closed=int(z.get("closed_count") or 0); wins=int(z.get("wins") or 0); losses=int(z.get("losses") or 0)
-        gp=_mt_float(z.get("gross_profit"),0) or 0; gl=_mt_float(z.get("gross_loss"),0) or 0
+        gp=_it_float(z.get("gross_profit"),0) or 0; gl=_it_float(z.get("gross_loss"),0) or 0
         pf=gp/gl if gl>0 else None
-        net=_mt_float(z.get("net_pnl"),0) or 0
+        net=_it_float(z.get("net_pnl"),0) or 0
         seen=t.last_seen
         if seen and getattr(seen,"tzinfo",None) is not None: seen=seen.replace(tzinfo=None)
         age=(now-seen).total_seconds()/86400 if seen else None
@@ -538,7 +538,7 @@ def _mt_report(market_type="FUTURES", min_closed_trades=10, min_profit_factor=1.
             start_ms=int(t.start_time_ms or 0)
             if start_ms>0: duration=max(0.0,(_it_time.time()*1000-start_ms)/86400000.0)
         except Exception: duration=None
-        copier=_mt_float(t.copier_pnl)
+        copier=_it_float(t.copier_pnl)
         if duration is None: reasons.append("MISSING_TRADER_DURATION")
         elif duration<30: reasons.append("INSUFFICIENT_TRADER_TENURE_UNDER_30_DAYS")
         if copier is None: reasons.append("MISSING_COPIER_PNL")
@@ -567,12 +567,12 @@ def _mt_report(market_type="FUTURES", min_closed_trades=10, min_profit_factor=1.
             for y in chosen:
                 ys=set(y.get("symbols") or []); union=syms|ys
                 if union: overlap=max(overlap,len(syms & ys)/len(union))
-            return _mt_float(x.get("score"),0)-overlap*18
+            return _it_float(x.get("score"),0)-overlap*18
         best=max(eligible,key=adjusted)
         best["selected"]=True; best["selection_reason"]="Risk score includes duration/copier PnL and recent symbol-overlap penalty"
         chosen.append(best); eligible.remove(best)
     if chosen:
-        weights={str(x["id"]):max(1.0,_mt_float(x.get("score"),1))/max(5.0,abs(_mt_float(x.get("mdd_30d"),max_mdd_pct))) for x in chosen}
+        weights={str(x["id"]):max(1.0,_it_float(x.get("score"),1))/max(5.0,abs(_it_float(x.get("mdd_30d"),max_mdd_pct))) for x in chosen}
         total=sum(weights.values()) or 1
         for x in chosen: x["allocation_pct"]=round(min(35.0,100*weights[str(x["id"])]/total),2)
     chosen_ids={int(x["id"]) for x in chosen}
